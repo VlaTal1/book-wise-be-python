@@ -5,10 +5,11 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import status
+from api.routes import reading_speed, status
 from core.config import settings
 from services.rabbitmq_consumer import rabbitmq_consumer
 from services.test_generator import process_test_generation_request
+from services.vosk_service import load_model
 
 # Config logging
 logging.basicConfig(
@@ -26,6 +27,9 @@ async def message_handler(payload):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Loading Vosk model for reading-speed feature")
+    load_model()
+
     logger.info("Starting consuming test generation requests")
     await rabbitmq_consumer.start_consuming(callback=message_handler)
 
@@ -46,6 +50,7 @@ app.add_middleware(
 )
 
 app.include_router(status.router, prefix="/api", tags=["status"])
+app.include_router(reading_speed.router, prefix="/ws", tags=["reading-speed"])
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
