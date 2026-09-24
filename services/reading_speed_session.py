@@ -49,6 +49,9 @@ class ReadingSpeedSession:
         tentative_events = self._tracker.preview_tentative()
         return committed_events + tentative_events
 
+    def audio_path(self) -> Path:
+        return Path(settings.reading_sessions_audio_dir) / f"{self.session_id}.wav"
+
     def is_reading_complete(self) -> bool:
         """Розпізнавання (навіть ще не підтверджене через TAIL_HOLDBACK) вже
         дійшло до кінця еталонного тексту — сигнал форсувати finalize(), не
@@ -86,9 +89,8 @@ class ReadingSpeedSession:
         return events, metrics, self._tracker.all_events()
 
     def _save_audio(self) -> None:
-        out_dir = Path(settings.reading_sessions_audio_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        path = out_dir / f"{self.session_id}.wav"
+        path = self.audio_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         with wave.open(str(path), "wb") as wav_file:
             wav_file.setnchannels(1)

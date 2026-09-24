@@ -8,6 +8,7 @@ from core.security import verify_token
 from models.reading_speed import ReadingSpeedResult
 from services.java_client import report_reading_speed_attempt
 from services.reading_speed_session import ReadingSpeedSession
+from services.stress_background import schedule_stress_check
 from utils.reference_text import load_reference_text
 
 logger = logging.getLogger(__name__)
@@ -72,14 +73,26 @@ async def reading_speed_ws(
     for event in events:
         await websocket.send_json(event.model_dump())
 
-    result = ReadingSpeedResult(text_id=reference.id, metrics=metrics)
+    # Зберігаємо в Java СИНХРОННО (до відправки "result" клієнту), щоб мати
+    # attempt_id — мобілка використає його для опитування стану окремого
+    # шару перевірки наголосу (рахується в фоні, після закриття сокета,
+    # див. services/stress_background.py). participant_id довіряємо як є
+    # (мобілка вже пройшла Supabase JWT) — без перевірки, що цей participant
+    # дійсно належить user_id; Java-ендпоінт /internal/** теж не має
+    # контексту користувача для такої перевірки. Прийнятний компроміс для
+    # MVP; якщо знадобиться суворіша ізоляція — Python має звертатися до
+    # Java за належністю participant->user.
+    attempt_id = report_reading_speed_attempt(participant_id, reference, metrics, all_word_events)
+
+    result = ReadingSpeedResult(text_id=reference.id, metrics=metrics, attempt_id=attempt_id)
     await websocket.send_json(result.model_dump())
     await websocket.close()
     logger.info(f"Reading-speed session {session.session_id} finished: {metrics}")
 
-    # participant_id довіряємо як є (мобілка вже пройшла Supabase JWT) — без
-    # перевірки, що цей participant дійсно належить user_id. Java-ендпоінт
-    # /internal/** теж не має контексту користувача для такої перевірки.
-    # Прийнятний компроміс для MVP; якщо знадобиться суворіша ізоляція —
-    # Python має звертатися до Java за належністю participant->user.
-    report_reading_speed_attempt(participant_id, reference, metrics, all_word_events)
+    if attempt_id is not None:
+        schedule_stress_check(
+            attempt_id=attempt_id,
+            session_id=session.session_id,
+            audio_path=session.audio_path(),
+            reference_words=[w.word for w in reference.words],
+        )

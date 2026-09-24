@@ -48,3 +48,9 @@ class ReadingSpeedResult(BaseModel):
     type: str = "result"
     text_id: str
     metrics: ReadingSpeedMetrics
+    # Id збереженого ReadingSpeedAttempt у Java — мобілка використовує його,
+    # щоб опитувати GET /api/reading-speed-attempts/{id} і показати
+    # лоадер/прогрес-бар шару перевірки наголосу (рахується в фоні окремо,
+    # див. services/stress_background.py). None, якщо збереження в Java не
+    # вдалося — тоді шар наголосу теж не запускається.
+    attempt_id: int | None = None

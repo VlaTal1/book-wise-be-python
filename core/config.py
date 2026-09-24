@@ -42,6 +42,27 @@ class Settings(BaseSettings):
     java_base_url: str = Field(default=os.getenv("JAVA_BASE_URL", "http://localhost:8080"))
     java_internal_api_key: str = Field(default=os.getenv("JAVA_INTERNAL_API_KEY", ""))
 
+    # Stress-check layer (окремий асинхронний шар поверх reading-speed,
+    # запускається ПІСЛЯ фіналізації WS-сесії — див. services/
+    # stress_background.py, docs/reading-speed-implementation-overview.md).
+    # Модель, натренована в master/train_stress_model_final.py на
+    # MFA-ознаках (energy/duration/pitch/phone-identity), серіалізована
+    # через joblib — рантайм лише завантажує й застосовує її.
+    stress_model_path: str = Field(default=os.getenv("STRESS_MODEL_PATH", "resources/models/stress_model.joblib"))
+    # Montreal Forced Aligner — важка runtime-залежність (conda-оточення з
+    # Kaldi/OpenFST, не pip-пакет). mfa_bin_dir додається на початок PATH
+    # перед викликом (за зразком master/STRESS_WORKLOG.md, розділ 3, п.9);
+    # порожній рядок означає "mfa вже в системному PATH".
+    mfa_bin_dir: str = Field(default=os.getenv("MFA_BIN_DIR", ""))
+    mfa_acoustic_model: str = Field(default=os.getenv("MFA_ACOUSTIC_MODEL", "ukrainian_mfa"))
+    mfa_dictionary: str = Field(default=os.getenv("MFA_DICTIONARY", "ukrainian_mfa"))
+    mfa_align_timeout_seconds: int = Field(default=int(os.getenv("MFA_ALIGN_TIMEOUT_SECONDS", 120)))
+    # Робочі директорії для forced alignment (окремий піддиректорій на
+    # сесію, не видаляється автоматично — корисно для діагностики; можна
+    # прибирати періодичним cron/скриптом при потребі).
+    stress_mfa_corpus_dir: str = Field(default=os.getenv("STRESS_MFA_CORPUS_DIR", "stress_sessions/corpus"))
+    stress_mfa_output_dir: str = Field(default=os.getenv("STRESS_MFA_OUTPUT_DIR", "stress_sessions/output"))
+
     @property
     def rabbitmq_url(self) -> str:
         return f"amqp://{self.rabbitmq_user}:{self.rabbitmq_password}@{self.rabbitmq_host}:{self.rabbitmq_port}/"

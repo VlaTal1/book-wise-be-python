@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.routes import reading_speed, status
 from core.config import settings
 from services.rabbitmq_consumer import rabbitmq_consumer
+from services.stress import model_store as stress_model_store
 from services.test_generator import process_test_generation_request
 from services.vosk_service import load_model
 
@@ -29,6 +30,9 @@ async def message_handler(payload):
 async def lifespan(app: FastAPI):
     logger.info("Loading Vosk model for reading-speed feature")
     load_model()
+
+    logger.info("Loading stress-check model (stress-accuracy layer)")
+    stress_model_store.load_model()
 
     logger.info("Starting consuming test generation requests")
     await rabbitmq_consumer.start_consuming(callback=message_handler)

@@ -1,0 +1,9 @@
+# We use ukrainian-word-stress ONLY in dictionary-only mode (Disambiguation.Dictionary,
+# see services/stress/stress_dictionary.py) — no Stanza/PyTorch needed. Its default
+# dependencies pull in stanza (+ torch), so install this file separately with --no-deps:
+#
+#   pip install -r requirements.txt
+#   pip install --no-deps -r requirements-stress.txt
+#
+# marisa-trie (the actual runtime dependency we need) is already in requirements.txt.
+ukrainian-word-stress==2.1.0
