@@ -8,6 +8,14 @@ class WordStatus(str, Enum):
     ERROR = "error"
     SKIPPED = "skipped"
     NOT_IN_VOCABULARY = "not_in_vocabulary"
+    # Еталонний текст свідомо довший (300-340 слів), ніж встигає прочитати
+    # дитина за виділену хвилину (запас на різний темп читання) — тому
+    # "хвіст", до якого розпізнавання просто не дійшло до кінця сесії, не є
+    # помилкою читання (на відміну від SKIPPED — реального пропуску слова
+    # ВСЕРЕДИНІ прочитаного). NOT_REACHED виключається з підрахунку метрик
+    # (ReadingAlignmentTracker.compute_metrics) — рахуємо точність лише по
+    # тому, що дитина реально встигла прочитати.
+    NOT_REACHED = "not_reached"
 
 
 class ReferenceWord(BaseModel):

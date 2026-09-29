@@ -49,6 +49,7 @@ class ReadingAlignmentTracker:
         self._total_words_seen = 0
         self._pending_recognized: list[str] = []
         self._statuses: dict[int, WordStatus] = {}
+        self._attempted_word_count = 0
 
     def feed_partial(self, recognized_words: list[str]) -> list[WordEvent]:
         """Викликається після кожного шматка аудіо з поточною (ще не
@@ -64,17 +65,30 @@ class ReadingAlignmentTracker:
     def finalize(self, recognized_words: list[str]) -> list[WordEvent]:
         """Викликається один раз з остаточною гіпотезою Vosk (FinalResult) —
         фіксує все, що залишилось у буфері, і позначає залишок еталону як
-        пропущений/не розпізнаний."""
+        NOT_REACHED (не SKIPPED!) — еталонний текст навмисно довший (300-340
+        слів), ніж дитина встигає прочитати за виділену хвилину (запас на
+        темп читання), тож "хвіст" тексту, до якого сесія просто не дійшла,
+        не є помилкою читання і не має псувати метрику точності."""
         new_words = recognized_words[self._total_words_seen:]
         self._pending_recognized.extend(new_words)
         self._total_words_seen += len(new_words)
         events = self._flush(final=True)
 
         events.extend(self._emit_not_in_vocabulary_run())
+        self._attempted_word_count = self._pointer
         while self._pointer < len(self._reference_words):
-            events.append(self._set_status(self._pointer, WordStatus.SKIPPED))
+            events.append(self._set_status(self._pointer, WordStatus.NOT_REACHED))
             self._pointer += 1
         return events
+
+    def attempted_word_count(self) -> int:
+        """К-сть слів еталону, до яких дитина реально дочитала (без хвоста
+        NOT_REACHED) — використовується для обрізання тексту, що йде в MFA
+        forced alignment (services/book_excerpt.py, stress_background.py):
+        передавати туди весь еталон (300-340 слів) на ~60-секундний запис
+        призводить до NoAlignmentsError, бо в аудіо фізично немає стількох
+        слів. Валідно лише ПІСЛЯ finalize()."""
+        return self._attempted_word_count
 
     def has_recognized_through_end(self, margin: int = 0) -> bool:
         """Чи розпізнаний потік (включно з ще не підтвердженим буфером, який
@@ -130,7 +144,11 @@ class ReadingAlignmentTracker:
         error = sum(1 for s in self._statuses.values() if s == WordStatus.ERROR)
         skipped = sum(1 for s in self._statuses.values() if s == WordStatus.SKIPPED)
         not_in_vocab = sum(1 for s in self._statuses.values() if s == WordStatus.NOT_IN_VOCABULARY)
-        total = len(self._reference_words)
+        # НЕ len(self._reference_words) — еталонний текст навмисно довший
+        # (300-340 слів, запас на темп читання), ніж дитина встигає прочитати
+        # за хвилину, тому "хвіст" (NOT_REACHED) виключений з підрахунку:
+        # точність/WPM рахуються лише по тому, що реально прочитано.
+        total = correct + error + skipped + not_in_vocab
         minutes = max(duration_seconds / 60, 1e-6)
 
         return ReadingSpeedMetrics(

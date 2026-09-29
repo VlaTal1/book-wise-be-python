@@ -74,6 +74,7 @@ def _run_mfa_align(corpus_dir: Path, output_dir: Path) -> None:
         "mfa", "align", str(corpus_dir),
         settings.mfa_acoustic_model, settings.mfa_dictionary, str(output_dir),
         "--clean", "-j", "1",
+        "--beam", str(settings.mfa_beam), "--retry_beam", str(settings.mfa_retry_beam),
     ]
     try:
         result = subprocess.run(

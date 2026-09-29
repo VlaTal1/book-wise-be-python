@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     mfa_bin_dir: str = Field(default=os.getenv("MFA_BIN_DIR", ""))
     mfa_acoustic_model: str = Field(default=os.getenv("MFA_ACOUSTIC_MODEL", "ukrainian_mfa"))
     mfa_dictionary: str = Field(default=os.getenv("MFA_DICTIONARY", "ukrainian_mfa"))
+    # Kaldi-дефолти (beam=10, retry_beam=40) розраховані на короткі утterance
+    # (секунди), а не на ~60-секундний одноблочний запис сесії читання —
+    # на реальних мобільних записах (тихіше/шумніше за дипломні контрольні
+    # записи) це стабільно валилось з NoAlignmentsError. Значення нижче —
+    # саме ті, що рекомендує власне повідомлення про цю помилку MFA
+    # ("mfa align ... --beam 100 --retry_beam 400"), підтверджено вручну.
+    mfa_beam: int = Field(default=int(os.getenv("MFA_BEAM", 100)))
+    mfa_retry_beam: int = Field(default=int(os.getenv("MFA_RETRY_BEAM", 400)))
     mfa_align_timeout_seconds: int = Field(default=int(os.getenv("MFA_ALIGN_TIMEOUT_SECONDS", 120)))
     # Робочі директорії для forced alignment (окремий піддиректорій на
     # сесію, не видаляється автоматично — корисно для діагностики; можна

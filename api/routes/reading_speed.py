@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 
@@ -6,6 +7,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status as 
 
 from core.security import verify_token
 from models.reading_speed import ReadingSpeedResult
+from services.book_excerpt import NoExcerptAvailableError, select_random_excerpt
 from services.java_client import report_reading_speed_attempt
 from services.reading_speed_session import ReadingSpeedSession
 from services.stress_background import schedule_stress_check
@@ -20,7 +22,10 @@ async def reading_speed_ws(
     websocket: WebSocket,
     token: str = Query(...),
     participant_id: int = Query(...),
-    text_id: str = Query(default="text_1"),
+    # Порожньо (за замовчуванням) -> випадковий уривок ~300-340 слів з книги,
+    # призначеної дитині (services/book_excerpt.py). Явний text_id лишається
+    # для розробки/діагностики (фіксований resources/reference_texts/*.json).
+    text_id: str | None = Query(default=None),
 ):
     try:
         user_id = verify_token(token)
@@ -30,16 +35,23 @@ async def reading_speed_ws(
         return
 
     try:
-        reference = load_reference_text(text_id)
+        if text_id:
+            reference = load_reference_text(text_id)
+        else:
+            reference = await asyncio.to_thread(select_random_excerpt, participant_id)
     except FileNotFoundError:
         await websocket.close(code=http_status.WS_1008_POLICY_VIOLATION, reason=f"Unknown text_id: {text_id}")
+        return
+    except NoExcerptAvailableError as e:
+        logger.warning(f"No excerpt available for participant {participant_id}: {e}")
+        await websocket.close(code=http_status.WS_1008_POLICY_VIOLATION, reason="No book excerpt available")
         return
 
     await websocket.accept()
     session = ReadingSpeedSession(session_id=str(uuid.uuid4()), user_id=user_id, reference=reference)
     logger.info(
         f"Reading-speed session {session.session_id} started for user {user_id}, "
-        f"participant {participant_id}, text {text_id}"
+        f"participant {participant_id}, text {reference.id}"
     )
 
     await websocket.send_json({
@@ -94,5 +106,8 @@ async def reading_speed_ws(
             attempt_id=attempt_id,
             session_id=session.session_id,
             audio_path=session.audio_path(),
-            reference_words=[w.word for w in reference.words],
+            # Лише слова, до яких дитина реально дочитала — не весь уривок
+            # (300-340 слів "з запасом"), інакше транскрипт для forced
+            # alignment не відповідає ~60-секундному запису (NoAlignmentsError).
+            reference_words=session.attempted_reference_words(),
         )

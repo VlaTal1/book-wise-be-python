@@ -54,6 +54,24 @@ def report_reading_speed_attempt(
         return None
 
 
+def get_participant_books(participant_id: int) -> list[dict]:
+    """Список книг, призначених дитині (Access), для випадкового вибору
+    уривка на читання (services/book_excerpt.py). Порожній список і при
+    "книг немає", і при мережевій помилці — обидва випадки кличучий код
+    обробляє однаково (немає з чого обрати уривок)."""
+    try:
+        response = requests.get(
+            f"{settings.java_base_url}/internal/participants/{participant_id}/books",
+            headers={"X-Internal-Api-Key": settings.java_internal_api_key},
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch books for participant {participant_id}: {e}")
+        return []
+
+
 def report_stress_progress(attempt_id: int, status: str, progress: int) -> None:
     """Проміжне оновлення прогресу шару перевірки наголосу (не критичне —
     якщо не дійшло, мобілка просто побачить лоадер трохи довше, фінальний

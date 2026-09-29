@@ -52,6 +52,15 @@ class ReadingSpeedSession:
     def audio_path(self) -> Path:
         return Path(settings.reading_sessions_audio_dir) / f"{self.session_id}.wav"
 
+    def attempted_reference_words(self) -> list[str]:
+        """Тільки ті слова еталону, до яких дитина реально дочитала (без
+        "хвоста" NOT_REACHED) — саме цей, коротший текст треба передавати в
+        шар перевірки наголосу (forced alignment), інакше транскрипт (усі
+        300-340 слів уривка) не відповідає тому, що фізично є в ~60-секундному
+        записі, і MFA падає з NoAlignmentsError. Валідно лише після finalize()."""
+        n = self._tracker.attempted_word_count()
+        return [w.word for w in self.reference.words[:n]]
+
     def is_reading_complete(self) -> bool:
         """Розпізнавання (навіть ще не підтверджене через TAIL_HOLDBACK) вже
         дійшло до кінця еталонного тексту — сигнал форсувати finalize(), не

@@ -18,13 +18,11 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-@lru_cache(maxsize=8)
-def load_reference_text(text_id: str) -> ReferenceText:
-    path = Path(settings.reference_texts_dir) / f"{text_id}.json"
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-
-    normalized = normalize_text(data["text"])
+def build_reference_text(text_id: str, title: str, raw_text: str) -> ReferenceText:
+    """Спільна логіка перетворення сирого тексту (з фіксованого JSON АБО з
+    динамічно обраного уривка книги, див. services/book_excerpt.py) на
+    ReferenceText з перевіркою покриття словником Vosk по кожному слову."""
+    normalized = normalize_text(raw_text)
     words = []
     for raw_word in normalized.split(" "):
         if not raw_word:
@@ -32,7 +30,16 @@ def load_reference_text(text_id: str) -> ReferenceText:
         in_vocab = is_in_vocabulary(raw_word, settings.vosk_model_path)
         words.append(ReferenceWord(index=len(words), word=raw_word, in_vocabulary=in_vocab))
 
-    return ReferenceText(id=data["id"], title=data.get("title", data["id"]), words=words)
+    return ReferenceText(id=text_id, title=title, words=words)
+
+
+@lru_cache(maxsize=8)
+def load_reference_text(text_id: str) -> ReferenceText:
+    path = Path(settings.reference_texts_dir) / f"{text_id}.json"
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    return build_reference_text(data["id"], data.get("title", data["id"]), data["text"])
 
 
 def build_grammar_phrase(reference: ReferenceText) -> str:
