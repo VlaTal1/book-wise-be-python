@@ -15,6 +15,7 @@ def report_reading_speed_attempt(
     reference: ReferenceText,
     metrics: ReadingSpeedMetrics,
     word_events: list[WordEvent],
+    audio_object_key: str | None,
 ) -> int | None:
     """Надсилає результат сесії читання в Java (service-to-service, той самий
     внутрішній API-ключ з обох боків — рішення по п.2 в docs/reading-speed-
@@ -23,7 +24,12 @@ def report_reading_speed_attempt(
     services/stress_background.py) або None, якщо збереження не вдалося:
     результат уже показаний користувачу в WS, помилка збереження історії не
     повинна ламати сесію — лише логуємо, і шар наголосу в цьому разі просто
-    не запускається (нема attempt id, до якого прив'язати результат)."""
+    не запускається (нема attempt id, до якого прив'язати результат).
+
+    referenceWordsJson (повний ReferenceWord, включно з display) зберігається
+    поруч з wordsJson (index+status) — без нього історія не змогла б показати
+    кольорову розмітку розпізнаного тексту, бо сам текст ніде більше не
+    зберігається (кожна сесія генерує його заново, WS-сесія ефемерна)."""
     payload = {
         "participantId": participant_id,
         "textId": reference.id,
@@ -36,6 +42,8 @@ def report_reading_speed_attempt(
         "wpm": metrics.wpm,
         "accuracy": metrics.accuracy,
         "wordsJson": json.dumps([e.model_dump(mode="json") for e in word_events], ensure_ascii=False),
+        "referenceWordsJson": json.dumps([w.model_dump(mode="json") for w in reference.words], ensure_ascii=False),
+        "audioFileName": audio_object_key,
     }
 
     try:

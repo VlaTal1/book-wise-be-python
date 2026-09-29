@@ -94,7 +94,9 @@ async def reading_speed_ws(
     # контексту користувача для такої перевірки. Прийнятний компроміс для
     # MVP; якщо знадобиться суворіша ізоляція — Python має звертатися до
     # Java за належністю participant->user.
-    attempt_id = report_reading_speed_attempt(participant_id, reference, metrics, all_word_events)
+    attempt_id = report_reading_speed_attempt(
+        participant_id, reference, metrics, all_word_events, session.audio_object_key()
+    )
 
     result = ReadingSpeedResult(text_id=reference.id, metrics=metrics, attempt_id=attempt_id)
     await websocket.send_json(result.model_dump())

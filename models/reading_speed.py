@@ -22,6 +22,11 @@ class ReferenceWord(BaseModel):
     index: int
     word: str
     in_vocabulary: bool
+    # Оригінальний фрагмент тексту (регістр + пунктуація одразу за словом) —
+    # лише для показу на екрані читання (utils/reference_text.py); word
+    # (нормалізоване, без пунктуації) — те, що йде в граматику Vosk/словник
+    # наголосів і бере участь у розпізнаванні/вирівнюванні.
+    display: str
 
 
 class ReferenceText(BaseModel):

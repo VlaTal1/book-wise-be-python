@@ -21,22 +21,15 @@ import re
 import uuid
 
 from PyPDF2 import PdfReader
-from minio import Minio
 from minio.error import S3Error
 
 from core.config import settings
 from models.reading_speed import ReferenceText
 from services import java_client
+from services.minio_client import minio_client
 from utils.reference_text import build_reference_text
 
 logger = logging.getLogger(__name__)
-
-minio_client = Minio(
-    settings.minio_endpoint,
-    access_key=settings.minio_access_key,
-    secret_key=settings.minio_secret_key,
-    secure=settings.minio_secure,
-)
 
 # "так на 300, може чуть більше" (постановка задачі) — беремо вікно речень,
 # що покриває [MIN, HARD_CAP] слів, віддаючи перевагу ближчому до MIN, але

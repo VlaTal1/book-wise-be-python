@@ -3,17 +3,22 @@ import logging
 import wave
 from pathlib import Path
 
+from minio.error import S3Error
 from vosk import KaldiRecognizer
 
 from core.config import settings
 from models.reading_speed import ReadingSpeedMetrics, ReferenceText, WordEvent
 from services.alignment import ReadingAlignmentTracker
+from services.minio_client import minio_client
 from services.vosk_service import SAMPLE_RATE, UNKNOWN_TOKEN, get_model
 from utils.reference_text import build_grammar_phrase
 
 logger = logging.getLogger(__name__)
 
 BYTES_PER_SAMPLE = 2  # PCM16
+# Префікс об'єктів у тому самому books-бакеті, що й файли книг (Java,
+# MinioService) — щоб не заводити окремий бакет лише заради аудіо сесій.
+AUDIO_MINIO_PREFIX = "reading-audio"
 
 
 class ReadingSpeedSession:
@@ -29,6 +34,7 @@ class ReadingSpeedSession:
         self._tracker = ReadingAlignmentTracker(reference.words)
         self._audio_chunks: list[bytes] = []
         self._total_audio_bytes = 0
+        self._audio_object_key: str | None = None
 
         grammar = json.dumps([build_grammar_phrase(reference), UNKNOWN_TOKEN], ensure_ascii=False)
         self._recognizer = KaldiRecognizer(get_model(), SAMPLE_RATE, grammar)
@@ -95,7 +101,16 @@ class ReadingSpeedSession:
         duration = self._total_audio_bytes / (SAMPLE_RATE * BYTES_PER_SAMPLE)
         metrics = self._tracker.compute_metrics(duration)
         self._save_audio()
+        self._upload_audio_to_minio()
         return events, metrics, self._tracker.all_events()
+
+    def audio_object_key(self) -> str | None:
+        """MinIO object key аудіо сесії (для запису в attempt.audioFileName,
+        щоб історія могла його відтворити) — None, якщо завантаження в MinIO
+        не вдалося (не критично: локальний .wav все одно є, шар перевірки
+        наголосу від нього не залежить, історія просто не покаже плеєр для
+        цього attempt)."""
+        return self._audio_object_key
 
     def _save_audio(self) -> None:
         path = self.audio_path()
@@ -108,3 +123,22 @@ class ReadingSpeedSession:
             wav_file.writeframes(b"".join(self._audio_chunks))
 
         logger.info(f"Збережено аудіо сесії {self.session_id}: {path}")
+
+    def _upload_audio_to_minio(self) -> None:
+        """Копія аудіо в MinIO (той самий books-бакет, що й у Java) — потрібна
+        для відтворення в історії читання. Локальний файл (audio_path())
+        лишається на диску незалежно від успіху цього кроку — саме він
+        використовується шаром перевірки наголосу (services/stress/
+        pipeline.py), тому падіння завантаження в MinIO не повинно ламати
+        решту сесії, лише логуємо і не заповнюємо audio_object_key."""
+        object_key = f"{AUDIO_MINIO_PREFIX}/{self.session_id}.wav"
+        try:
+            minio_client.fput_object(
+                bucket_name=settings.minio_bucket,
+                object_name=object_key,
+                file_path=str(self.audio_path()),
+                content_type="audio/wav",
+            )
+            self._audio_object_key = object_key
+        except S3Error as e:
+            logger.error(f"Не вдалося завантажити аудіо сесії {self.session_id} в MinIO: {e}")
