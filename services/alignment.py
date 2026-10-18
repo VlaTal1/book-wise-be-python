@@ -139,6 +139,14 @@ class ReadingAlignmentTracker:
             if i in self._statuses
         ]
 
+    def override_status(self, index: int, status: WordStatus) -> WordEvent:
+        """Пізніша корекція статусу вже зафіксованого слова (гібридна перевірка
+        замін після читання, services/substitution_check.py)."""
+        return self._set_status(index, status)
+
+    def status_of(self, index: int) -> WordStatus | None:
+        return self._statuses.get(index)
+
     def compute_metrics(self, duration_seconds: float) -> ReadingSpeedMetrics:
         correct = sum(1 for s in self._statuses.values() if s == WordStatus.CORRECT)
         error = sum(1 for s in self._statuses.values() if s == WordStatus.ERROR)

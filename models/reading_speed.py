@@ -57,6 +57,17 @@ class ReadingSpeedMetrics(BaseModel):
     accuracy: float
 
 
+class ComprehensionAnswer(BaseModel):
+    answer: str
+    correct: bool
+
+
+class ComprehensionQuestion(BaseModel):
+    question: str
+    quote: str
+    answers: list[ComprehensionAnswer]
+
+
 class ReadingSpeedResult(BaseModel):
     type: str = "result"
     text_id: str
@@ -67,3 +78,9 @@ class ReadingSpeedResult(BaseModel):
     # див. services/stress_background.py). None, якщо збереження в Java не
     # вдалося — тоді шар наголосу теж не запускається.
     attempt_id: int | None = None
+    # Невеликий тест на розуміння прочитаного (1-3 питання, кількість обирає
+    # AI залежно від того, скільки матеріалу дав уривок) — генерується
+    # синхронно, одразу тут, з тексту, який дитина РЕАЛЬНО встигла прочитати
+    # (services/comprehension_quiz.py). None, якщо уривок закороткий для тесту
+    # або генерація не вдалася — тоді мобілка просто не показує секцію тесту.
+    quiz: list[ComprehensionQuestion] | None = None

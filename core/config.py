@@ -71,6 +71,17 @@ class Settings(BaseSettings):
     stress_mfa_corpus_dir: str = Field(default=os.getenv("STRESS_MFA_CORPUS_DIR", "stress_sessions/corpus"))
     stress_mfa_output_dir: str = Field(default=os.getenv("STRESS_MFA_OUTPUT_DIR", "stress_sessions/output"))
 
+    # Гібридна перевірка замін слів (services/substitution_check.py).
+    # Граматика Vosk підтягує іншу форму слова ("теплий" замість "теплу") до
+    # слова еталону й не бачить таких замін (master/recordings_v2: 2 з 16 у
+    # дорослих, 0 з 5 у дитини). Тому заміну додатково підтверджують два
+    # незалежні розпізнавачі без граматики: Vosk (паралельно під час читання)
+    # і Moonshine (після читання). Якщо torch/transformers не встановлені або
+    # модель не завантажилась — перевірка вимикається, працює лише граматика.
+    hybrid_check_enabled: bool = Field(default=os.getenv("HYBRID_CHECK_ENABLED", "true").lower() == "true")
+    moonshine_model_id: str = Field(default=os.getenv("MOONSHINE_MODEL_ID", "UsefulSensors/moonshine-tiny-uk"))
+    moonshine_torch_threads: int = Field(default=int(os.getenv("MOONSHINE_TORCH_THREADS", 4)))
+
     @property
     def rabbitmq_url(self) -> str:
         return f"amqp://{self.rabbitmq_user}:{self.rabbitmq_password}@{self.rabbitmq_host}:{self.rabbitmq_port}/"

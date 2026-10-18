@@ -7,7 +7,8 @@ from minio.error import S3Error
 from vosk import KaldiRecognizer
 
 from core.config import settings
-from models.reading_speed import ReadingSpeedMetrics, ReferenceText, WordEvent
+from models.reading_speed import ReadingSpeedMetrics, ReferenceText, WordEvent, WordStatus
+from services import substitution_check
 from services.alignment import ReadingAlignmentTracker
 from services.minio_client import minio_client
 from services.vosk_service import SAMPLE_RATE, UNKNOWN_TOKEN, get_model
@@ -41,9 +42,17 @@ class ReadingSpeedSession:
         self._recognizer.SetWords(True)
         self._latest_partial_word_count = 0
 
+        # Другий розпізнавач без граматики для гібридної перевірки замін —
+        # у власному потоці, щоб не затримувати підсвітку слів.
+        self._open_vosk = (
+            substitution_check.OpenVoskWorker(get_model()) if substitution_check.is_available() else None
+        )
+
     def process_audio_chunk(self, chunk: bytes) -> list[WordEvent]:
         self._audio_chunks.append(chunk)
         self._total_audio_bytes += len(chunk)
+        if self._open_vosk is not None:
+            self._open_vosk.feed(chunk)
         self._recognizer.AcceptWaveform(chunk)
         partial = json.loads(self._recognizer.PartialResult())
         words = partial.get("partial", "").split()
@@ -66,6 +75,15 @@ class ReadingSpeedSession:
         записі, і MFA падає з NoAlignmentsError. Валідно лише після finalize()."""
         n = self._tracker.attempted_word_count()
         return [w.word for w in self.reference.words[:n]]
+
+    def attempted_text(self) -> str:
+        """Той самий прочитаний відрізок, що й attempted_reference_words(), але
+        з оригінальним регістром і пунктуацією (display, не нормалізоване
+        word) — саме такий текст варто давати AI для генерації тесту на
+        розуміння прочитаного (services/comprehension_quiz.py). Валідно лише
+        після finalize()."""
+        n = self._tracker.attempted_word_count()
+        return " ".join(w.display for w in self.reference.words[:n])
 
     def is_reading_complete(self) -> bool:
         """Розпізнавання (навіть ще не підтверджене через TAIL_HOLDBACK) вже
@@ -103,6 +121,37 @@ class ReadingSpeedSession:
         self._save_audio()
         self._upload_audio_to_minio()
         return events, metrics, self._tracker.all_events()
+
+    def run_substitution_check(self) -> tuple[list[WordEvent], ReadingSpeedMetrics, list[WordEvent]]:
+        """Гібридна перевірка замін після finalize(): слова, які граматика
+        зарахувала як правильні, але обидва незалежні розпізнавачі без
+        граматики (Vosk і Moonshine) почули інакше, перепозначаються як
+        помилка або пропуск. Повертає (змінені події, оновлені метрики,
+        повний пословний результат). Блокуючий виклик (Moonshine ~0,05 від
+        тривалості запису) — запускати через asyncio.to_thread."""
+        duration = self._total_audio_bytes / (SAMPLE_RATE * BYTES_PER_SAMPLE)
+        if self._open_vosk is None:
+            return [], self._tracker.compute_metrics(duration), self._tracker.all_events()
+
+        open_words = self._open_vosk.finish()
+        moonshine_words = substitution_check.transcribe_moonshine(b"".join(self._audio_chunks))
+        attempted = self.attempted_reference_words()
+        confirmed = substitution_check.confirmed_errors(attempted, open_words, moonshine_words)
+
+        events = []
+        for index, status in sorted(confirmed.items()):
+            if self._tracker.status_of(index) == WordStatus.CORRECT:
+                events.append(self._tracker.override_status(index, status))
+        logger.info(
+            f"Session {self.session_id}: substitution check changed {len(events)} word(s) "
+            f"(both open recognizers disagree on {len(confirmed)})"
+        )
+        return events, self._tracker.compute_metrics(duration), self._tracker.all_events()
+
+    def close(self) -> None:
+        """Зупинити фоновий розпізнавач, якщо сесію перервано до finalize()."""
+        if self._open_vosk is not None:
+            self._open_vosk.stop()
 
     def audio_object_key(self) -> str | None:
         """MinIO object key аудіо сесії (для запису в attempt.audioFileName,

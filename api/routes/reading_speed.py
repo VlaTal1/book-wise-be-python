@@ -8,6 +8,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status as 
 from core.security import verify_token
 from models.reading_speed import ReadingSpeedResult
 from services.book_excerpt import NoExcerptAvailableError, select_random_excerpt
+from services.comprehension_quiz import generate_comprehension_quiz
 from services.java_client import report_reading_speed_attempt
 from services.reading_speed_session import ReadingSpeedSession
 from services.stress_background import schedule_stress_check
@@ -79,11 +80,27 @@ async def reading_speed_ws(
                 break
     except WebSocketDisconnect:
         logger.info(f"Session {session.session_id} disconnected mid-stream")
+        session.close()
         return
 
     events, metrics, all_word_events = session.finalize()
     for event in events:
         await websocket.send_json(event.model_dump())
+
+    # Тест на розуміння залежить лише від прочитаного тексту, тому генерується
+    # паралельно з перевіркою замін, а не після неї.
+    quiz_task = asyncio.create_task(asyncio.to_thread(generate_comprehension_quiz, session.attempted_text()))
+
+    # Гібридна перевірка замін (services/substitution_check.py): граматика не
+    # бачить іншої форми слова, тому слова, які обидва розпізнавачі без
+    # граматики почули інакше, перепозначаються як помилка ще ДО збереження
+    # результату — метрики в Java і в "result" уже враховують ці помилки.
+    try:
+        changed, metrics, all_word_events = await asyncio.to_thread(session.run_substitution_check)
+        for event in changed:
+            await websocket.send_json(event.model_dump())
+    except Exception as e:
+        logger.error(f"Substitution check failed for session {session.session_id}: {e}")
 
     # Зберігаємо в Java СИНХРОННО (до відправки "result" клієнту), щоб мати
     # attempt_id — мобілка використає його для опитування стану окремого
@@ -98,7 +115,19 @@ async def reading_speed_ws(
         participant_id, reference, metrics, all_word_events, session.audio_object_key()
     )
 
-    result = ReadingSpeedResult(text_id=reference.id, metrics=metrics, attempt_id=attempt_id)
+    # Той самий виклик Claude, що й у "великому" генераторі тестів
+    # (services/test_generator.py), але з промптом під короткий уривок і без
+    # розбиття на частини — секунди, а не хвилини, тому результат віддаємо
+    # разом з "result", а не окремим повідомленням.
+    try:
+        quiz = await quiz_task
+    except Exception as e:
+        logger.error(f"Failed to generate comprehension quiz for session {session.session_id}: {e}")
+        quiz = []
+
+    result = ReadingSpeedResult(
+        text_id=reference.id, metrics=metrics, attempt_id=attempt_id, quiz=quiz or None
+    )
     await websocket.send_json(result.model_dump())
     await websocket.close()
     logger.info(f"Reading-speed session {session.session_id} finished: {metrics}")
