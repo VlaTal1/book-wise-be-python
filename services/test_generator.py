@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 from typing import Dict, List, Any, Union
 
 from PyPDF2 import PdfReader
@@ -8,7 +9,7 @@ from minio import Minio
 from minio.error import S3Error
 
 from core.config import settings
-from services.llm_service import generate_answer
+from services.llm_service import ContentBlockedError, generate_answer
 from services.rabbitmq_producer import RabbitMQProducer
 from utils import split_text_into_parts, get_json_from_response
 from utils.prompt_utils import get_prompt
@@ -52,7 +53,7 @@ async def process_test_generation_request(request: Union[str, Dict[str, Any]]) -
 
         if not book_text:
             logger.error(f"Failed to get book's text: {file_name}")
-            await send_error_response(file_name, f"Failed to get book's text: {file_name}")
+            await send_error_response(file_name, test_id, f"Failed to get book's text: {file_name}")
             return
 
         questions = generate_questions(book_text, question_count)
@@ -68,7 +69,8 @@ async def process_test_generation_request(request: Union[str, Dict[str, Any]]) -
     except Exception as e:
         logger.error(f"Failed to process test generation request: {e}")
         if 'file_name' in locals() and file_name:
-            await send_error_response(file_name, f"Failed to process test generation request: {str(e)}")
+            # testId потрібен Java, щоб позначити тести як FAILED, а не лишити їх у стані генерації.
+            await send_error_response(file_name, locals().get('test_id'), f"Failed to process test generation request: {str(e)}")
 
 
 async def get_book_text(file_name: str, start_page: int, end_page: int) -> str:
@@ -78,8 +80,9 @@ async def get_book_text(file_name: str, start_page: int, end_page: int) -> str:
         temp_file_path = os.path.join(settings.temp_dir, f"{file_name}.pdf")
 
         if not minio_client.bucket_exists(settings.minio_bucket):
+            # Помилку з testId надішле викликач, коли отримає порожній текст.
             logger.warning(f"MinIO bucket {settings.minio_bucket} does not exists")
-            await send_error_response(file_name, f"MinIO bucket {settings.minio_bucket} does not exists")
+            return ""
 
         logger.info(f"Loading book {file_name} from MinIO")
         minio_client.fget_object(
@@ -112,6 +115,46 @@ async def get_book_text(file_name: str, start_page: int, end_page: int) -> str:
         return ""
 
 
+QUESTION_ATTEMPTS = 3
+
+
+# Одна невдала відповідь моделі (порожня, без JSON, мережа) не повинна валити
+# весь тест — пробуємо ще раз. Блокування за вмістом не повторюємо: на той
+# самий текст Gemini відповість так само.
+def generate_question(prompt: str, index: int) -> Dict[str, Any]:
+    for attempt in range(1, QUESTION_ATTEMPTS + 1):
+        try:
+            return get_json_from_response(generate_answer(prompt))
+        except ContentBlockedError:
+            raise
+        except Exception as e:
+            logger.warning(f"Question {index}: attempt {attempt}/{QUESTION_ATTEMPTS} failed: {e}")
+            if attempt == QUESTION_ATTEMPTS:
+                raise
+            time.sleep(2 * attempt)
+
+
+# Якщо фрагмент заблоковано (PROHIBITED_CONTENT тощо — це не вимикається
+# налаштуваннями безпеки), пробуємо кожну половину окремо: проблемне місце
+# зазвичай в одному абзаці. Не вийшло — пропускаємо це питання.
+def generate_question_for_part(part: str, index: int) -> Union[Dict[str, Any], None]:
+    try:
+        return generate_question(get_prompt(part), index)
+    except ContentBlockedError as e:
+        logger.warning(f"Question {index}: part blocked ({e}), trying its halves")
+
+    paragraphs = part.split("\n")
+    if len(paragraphs) < 2:
+        return None
+    middle = len(paragraphs) // 2
+    for half in ("\n".join(paragraphs[:middle]), "\n".join(paragraphs[middle:])):
+        try:
+            return generate_question(get_prompt(half), index)
+        except ContentBlockedError as e:
+            logger.warning(f"Question {index}: half blocked ({e})")
+    return None
+
+
 def generate_questions(text: str, count: int) -> List[Dict[str, Any]]:
     logger.info(f"Starting test generation")
     questions = []
@@ -119,9 +162,14 @@ def generate_questions(text: str, count: int) -> List[Dict[str, Any]]:
     parts = split_text_into_parts(text, count)
     for index, part in enumerate(parts, start=1):
         logger.info(f"Generating question {index}/{count}")
-        prompt = get_prompt(part)
-        json_part = get_json_from_response(generate_answer(prompt))
-        questions.append(json_part)
+        question = generate_question_for_part(part, index)
+        if question is None:
+            logger.warning(f"Question {index}: skipped, text blocked by Gemini")
+            continue
+        questions.append(question)
+
+    if not questions:
+        raise RuntimeError("All parts of the text were blocked by Gemini")
 
     logger.info(f"Test generation completed")
 
@@ -146,9 +194,10 @@ async def send_response(response: Dict[str, Any]) -> None:
         logger.error(f"Failed to send results: {e}")
 
 
-async def send_error_response(file_name: str, error_message: str) -> None:
+async def send_error_response(file_name: str, test_id: Any, error_message: str) -> None:
     response = {
         "fileName": file_name,
+        "testId": test_id,
         "error": error_message,
         "questions": []
     }
