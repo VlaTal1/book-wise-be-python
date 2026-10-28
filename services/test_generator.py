@@ -8,7 +8,7 @@ from minio import Minio
 from minio.error import S3Error
 
 from core.config import settings
-from services.claude_service import claude_generate_answer
+from services.llm_service import generate_answer
 from services.rabbitmq_producer import RabbitMQProducer
 from utils import split_text_into_parts, get_json_from_response
 from utils.prompt_utils import get_prompt
@@ -120,8 +120,7 @@ def generate_questions(text: str, count: int) -> List[Dict[str, Any]]:
     for index, part in enumerate(parts, start=1):
         logger.info(f"Generating question {index}/{count}")
         prompt = get_prompt(part)
-        response = claude_generate_answer(prompt)
-        json_part = get_json_from_response(response.content[0].text)
+        json_part = get_json_from_response(generate_answer(prompt))
         questions.append(json_part)
 
     logger.info(f"Test generation completed")

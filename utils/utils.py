@@ -39,9 +39,12 @@ def split_text_into_parts(text: str, num_parts: int):
     return parts
 
 def get_json_from_response(text):
-    json_match = re.search(r"<json_format>(.*?)</json_format>", text, re.DOTALL)
-    if json_match:
-        json_str = json_match.group(1).strip()
+    # Модель може згадати тег <json_format> у своїх міркуваннях до самого блоку
+    # відповіді, тому беремо текст між ОСТАННІМ відкривальним і останнім
+    # закривальним тегом, а не перший збіг.
+    start, end = text.rfind("<json_format>"), text.rfind("</json_format>")
+    if start != -1 and end > start:
+        json_str = text[start + len("<json_format>"):end].strip()
     else:
         markdown_match = re.search(r"```json(.*?)```", text, re.DOTALL)
         if markdown_match:

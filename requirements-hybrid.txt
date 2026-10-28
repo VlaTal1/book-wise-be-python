@@ -1,4 +1,4 @@
-# Гібридна перевірка замін слів (services/substitution_check.py): Moonshine Tiny UK
+# Гібридна перевірка замін слів (services/substitution_check.py): Moonshine Base UK
 # через transformers. Без цих пакетів застосунок працює як раніше — лише з граматикою
 # Vosk (перевірка вимикається з попередженням у лозі). Вимкнути явно: HYBRID_CHECK_ENABLED=false.
 #
@@ -8,6 +8,6 @@
 #   pip install torch==2.14.0 --index-url https://download.pytorch.org/whl/cpu
 #   pip install -r requirements-hybrid.txt
 #
-# Модель UsefulSensors/moonshine-tiny-uk (~110 МБ) завантажується з Hugging Face при
+# Модель UsefulSensors/moonshine-base-uk (~240 МБ) завантажується з Hugging Face при
 # першому старті й далі береться з кешу (~/.cache/huggingface).
 transformers==5.16.1

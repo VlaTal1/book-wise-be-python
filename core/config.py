@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     minio_bucket: str = Field(default=os.getenv("MINIO_BUCKET", "books"))
     minio_secure: bool = Field(default=bool(int(os.getenv("MINIO_SECURE", "0"))))
 
+    # LLM для генерування тестів (services/llm_service.py). Модель обрано в
+    # master/quiz_exp: найкраще дотримується правил запиту щодо кількості запитань.
+    gemini_api_key: str = Field(default=os.getenv("GEMINI_API_KEY", ""))
+    llm_model: str = Field(default=os.getenv("LLM_MODEL", "gemini-3.8-flash"))
+    llm_timeout_seconds: int = Field(default=int(os.getenv("LLM_TIMEOUT_SECONDS", 90)))
+
     # Temporary file storage
     temp_dir: str = Field(default=os.getenv("TEMP_DIR", "/tmp"))
 
@@ -79,7 +85,7 @@ class Settings(BaseSettings):
     # і Moonshine (після читання). Якщо torch/transformers не встановлені або
     # модель не завантажилась — перевірка вимикається, працює лише граматика.
     hybrid_check_enabled: bool = Field(default=os.getenv("HYBRID_CHECK_ENABLED", "true").lower() == "true")
-    moonshine_model_id: str = Field(default=os.getenv("MOONSHINE_MODEL_ID", "UsefulSensors/moonshine-tiny-uk"))
+    moonshine_model_id: str = Field(default=os.getenv("MOONSHINE_MODEL_ID", "UsefulSensors/moonshine-base-uk"))
     moonshine_torch_threads: int = Field(default=int(os.getenv("MOONSHINE_TORCH_THREADS", 4)))
 
     @property
