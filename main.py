@@ -1,4 +1,5 @@
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -61,4 +62,7 @@ app.include_router(status.router, prefix="/api", tags=["status"])
 app.include_router(reading_speed.router, prefix="/ws", tags=["reading-speed"])
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=True)
+    # UVICORN_RELOAD=1 — автоперезапуск при зміні файлів (розробка). Для
+    # реального використання вимкнено: зміна будь-якого файлу посеред уроку
+    # перезапустила б сервер і обірвала всі сесії читання.
+    uvicorn.run("main:app", host="0.0.0.0", port=8001, reload=os.getenv("UVICORN_RELOAD") == "1")

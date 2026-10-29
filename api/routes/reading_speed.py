@@ -68,7 +68,12 @@ async def reading_speed_ws(
             if message.get("type") == "websocket.disconnect":
                 return
             if message.get("bytes") is not None:
-                for event in session.process_audio_chunk(message["bytes"]):
+                # Розпізнавання Vosk — синхронний важкий виклик: в окремому
+                # потоці, інакше одна сесія блокує event loop для всіх інших
+                # одночасних читань (Vosk/Kaldi відпускає GIL, тож потоки
+                # справді працюють паралельно на різних ядрах).
+                chunk_events = await asyncio.to_thread(session.process_audio_chunk, message["bytes"])
+                for event in chunk_events:
                     await websocket.send_json(event.model_dump())
                 if session.is_reading_complete():
                     # Розпізнавання дійшло до кінця тексту — не чекаємо
@@ -80,7 +85,7 @@ async def reading_speed_ws(
                 break
     except WebSocketDisconnect:
         logger.info(f"Session {session.session_id} disconnected mid-stream")
-        session.close()
+        await asyncio.to_thread(session.close)
         return
 
     # Читання завершено (стоп, таймер або дочитано до кінця) — одразу кажемо
@@ -88,7 +93,8 @@ async def reading_speed_ws(
     # замін (Moonshine), тесту на розуміння та збереження в Java.
     await websocket.send_json({"type": "processing"})
 
-    events, metrics, all_word_events = session.finalize()
+    # FinalResult Vosk + запис WAV + завантаження в MinIO — теж поза event loop.
+    events, metrics, all_word_events = await asyncio.to_thread(session.finalize)
     for event in events:
         await websocket.send_json(event.model_dump())
 
