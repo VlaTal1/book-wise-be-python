@@ -83,20 +83,34 @@ async def reading_speed_ws(
         session.close()
         return
 
+    # Читання завершено (стоп, таймер або дочитано до кінця) — одразу кажемо
+    # клієнту, щоб він перейшов на екран результатів, не чекаючи перевірки
+    # замін (Moonshine), тесту на розуміння та збереження в Java.
+    await websocket.send_json({"type": "processing"})
+
     events, metrics, all_word_events = session.finalize()
     for event in events:
         await websocket.send_json(event.model_dump())
 
     # Тест на розуміння залежить лише від прочитаного тексту, тому генерується
-    # паралельно з перевіркою замін, а не після неї.
+    # паралельно з перевіркою замін і віддається клієнту окремим "quiz", щойно
+    # готовий: учень проходить його, поки Moonshine ще перевіряє заміни.
     quiz_task = asyncio.create_task(asyncio.to_thread(generate_comprehension_quiz, session.attempted_text()))
+    substitution_task = asyncio.create_task(asyncio.to_thread(session.run_substitution_check))
+
+    try:
+        quiz = await quiz_task
+    except Exception as e:
+        logger.error(f"Failed to generate comprehension quiz for session {session.session_id}: {e}")
+        quiz = []
+    await websocket.send_json({"type": "quiz", "questions": [q.model_dump() for q in quiz] if quiz else []})
 
     # Гібридна перевірка замін (services/substitution_check.py): граматика не
     # бачить іншої форми слова, тому слова, які обидва розпізнавачі без
     # граматики почули інакше, перепозначаються як помилка ще ДО збереження
     # результату — метрики в Java і в "result" уже враховують ці помилки.
     try:
-        changed, metrics, all_word_events = await asyncio.to_thread(session.run_substitution_check)
+        changed, metrics, all_word_events = await substitution_task
         for event in changed:
             await websocket.send_json(event.model_dump())
     except Exception as e:
@@ -114,16 +128,6 @@ async def reading_speed_ws(
     attempt_id = report_reading_speed_attempt(
         participant_id, reference, metrics, all_word_events, session.audio_object_key()
     )
-
-    # Той самий виклик Claude, що й у "великому" генераторі тестів
-    # (services/test_generator.py), але з промптом під короткий уривок і без
-    # розбиття на частини — секунди, а не хвилини, тому результат віддаємо
-    # разом з "result", а не окремим повідомленням.
-    try:
-        quiz = await quiz_task
-    except Exception as e:
-        logger.error(f"Failed to generate comprehension quiz for session {session.session_id}: {e}")
-        quiz = []
 
     result = ReadingSpeedResult(
         text_id=reference.id, metrics=metrics, attempt_id=attempt_id, quiz=quiz or None
