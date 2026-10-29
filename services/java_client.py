@@ -16,6 +16,7 @@ def report_reading_speed_attempt(
     metrics: ReadingSpeedMetrics,
     word_events: list[WordEvent],
     audio_object_key: str | None,
+    quiz_total: int = 0,
 ) -> int | None:
     """Надсилає результат сесії читання в Java (service-to-service, той самий
     внутрішній API-ключ з обох боків — рішення по п.2 в docs/reading-speed-
@@ -44,6 +45,9 @@ def report_reading_speed_attempt(
         "wordsJson": json.dumps([e.model_dump(mode="json") for e in word_events], ensure_ascii=False),
         "referenceWordsJson": json.dumps([w.model_dump(mode="json") for w in reference.words], ensure_ascii=False),
         "audioFileName": audio_object_key,
+        # Скільки питань у тесті на розуміння (0 — тесту немає): Java чекає
+        # результат тесту від учня, перш ніж виставити остаточну оцінку.
+        "quizTotal": quiz_total,
     }
 
     try:

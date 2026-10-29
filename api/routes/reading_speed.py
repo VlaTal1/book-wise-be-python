@@ -126,7 +126,8 @@ async def reading_speed_ws(
     # MVP; якщо знадобиться суворіша ізоляція — Python має звертатися до
     # Java за належністю participant->user.
     attempt_id = report_reading_speed_attempt(
-        participant_id, reference, metrics, all_word_events, session.audio_object_key()
+        participant_id, reference, metrics, all_word_events, session.audio_object_key(),
+        quiz_total=len(quiz) if quiz else 0,
     )
 
     result = ReadingSpeedResult(
