@@ -25,7 +25,7 @@ from minio.error import S3Error
 
 from core.config import settings
 from models.reading_speed import ReferenceText
-from services import java_client
+from services import catalog_excerpts, java_client
 from services.minio_client import minio_client
 from services.pdf_text import extract_text
 from utils.reference_text import build_reference_text
@@ -57,7 +57,7 @@ def select_random_excerpt(participant_id: int) -> ReferenceText:
 
     for book in pdf_books:
         try:
-            excerpt = _extract_excerpt_from_book(book)
+            excerpt = excerpt_for_book(book)
         except Exception:
             logger.exception(f"Failed to extract excerpt from book {book.get('id')} ({book.get('fileName')})")
             continue
@@ -69,6 +69,18 @@ def select_random_excerpt(participant_id: int) -> ReferenceText:
         f"No suitable book excerpt for participant {participant_id}: "
         f"{len(books)} books assigned, {len(pdf_books)} of them PDF"
     )
+
+
+def excerpt_for_book(book: dict) -> ReferenceText | None:
+    """Випадковий уривок з конкретної книги: для книг каталогу — один із
+    заздалегідь підготовлених (закінчені сцени), для решти — вікно речень з
+    випадкової сторінки PDF."""
+    catalog_key = book.get("catalogKey")
+    if catalog_excerpts.has_excerpts(catalog_key):
+        return catalog_excerpts.random_excerpt(catalog_key, book.get("title"))
+    if book.get("fileType") not in (None, "application/pdf"):
+        return None
+    return _extract_excerpt_from_book(book)
 
 
 def _extract_excerpt_from_book(book: dict) -> ReferenceText | None:

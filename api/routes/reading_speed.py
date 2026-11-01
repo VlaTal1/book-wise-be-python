@@ -7,7 +7,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, status as 
 
 from core.security import verify_token
 from models.reading_speed import ReadingSpeedResult
-from services.book_excerpt import NoExcerptAvailableError, select_random_excerpt
+from services.book_excerpt import NoExcerptAvailableError, excerpt_for_book, select_random_excerpt
 from services.comprehension_quiz import generate_comprehension_quiz
 from services.java_client import ReadingAssignmentUnavailableError, get_reading_assignment, report_reading_speed_attempt
 from services.reading_speed_session import ReadingSpeedSession
@@ -46,8 +46,21 @@ async def reading_speed_ws(
     try:
         if assignment_id is not None:
             assignment = await asyncio.to_thread(get_reading_assignment, assignment_id, participant_id)
-            reference = build_reference_text(f"assignment:{assignment_id}", assignment["title"], assignment["text"])
             time_limit_seconds = assignment.get("timeLimitSeconds")
+            if assignment.get("mode") == "RANDOM":
+                # Щоразу новий випадковий уривок з книги, обраної вчителем.
+                book = {
+                    "id": assignment.get("bookId"),
+                    "title": assignment.get("title"),
+                    "fileName": assignment.get("fileName"),
+                    "fileType": assignment.get("fileType"),
+                    "catalogKey": assignment.get("catalogKey"),
+                }
+                reference = await asyncio.to_thread(excerpt_for_book, book)
+                if reference is None:
+                    raise NoExcerptAvailableError(f"No suitable excerpt in book {book['id']} for assignment {assignment_id}")
+            else:
+                reference = build_reference_text(f"assignment:{assignment_id}", assignment["title"], assignment["text"])
         elif text_id:
             reference = load_reference_text(text_id)
         else:
