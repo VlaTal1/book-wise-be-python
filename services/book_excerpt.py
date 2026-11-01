@@ -5,9 +5,9 @@ Java, отримуємо через java_client.get_participant_books), для �
 
 Пайплайн: список призначених книг (Java, internal-ендпоінт) -> фільтр на
 PDF (EPUB поки не парситься ніде в проекті — немає готового екстрактора
-тексту) -> випадкова книга -> завантаження з MinIO -> PyPDF2, випадкова
-сторінка -> очищення артефактів PDF (перенос слів через дефіс на межі рядка,
-номери сторінок) -> розбиття на речення -> випадкове вікно речень такого
+тексту) -> випадкова книга -> завантаження з MinIO -> випадкова сторінка ->
+чистий текст твору (services/pdf_text: без колонтитулів, виносок, підписів,
+завдань підручника) -> розбиття на речення -> випадкове вікно речень такого
 розміру, щоб не розрізати речення посередині.
 
 Якщо книга не підійшла (замало тексту, скановані сторінки без шару тексту
@@ -20,13 +20,14 @@ import random
 import re
 import uuid
 
-from PyPDF2 import PdfReader
+import pymupdf
 from minio.error import S3Error
 
 from core.config import settings
 from models.reading_speed import ReferenceText
 from services import java_client
 from services.minio_client import minio_client
+from services.pdf_text import extract_text
 from utils.reference_text import build_reference_text
 
 logger = logging.getLogger(__name__)
@@ -43,8 +44,6 @@ EXCERPT_HARD_CAP_WORDS = 400
 EXCERPT_MAX_PAGES_SCAN = 20
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
-_HYPHEN_LINEBREAK_RE = re.compile(r"(\w)-\n(\w)")
-_PAGE_NUMBER_LINE_RE = re.compile(r"^\d{1,4}$")
 
 
 class NoExcerptAvailableError(Exception):
@@ -81,23 +80,22 @@ def _extract_excerpt_from_book(book: dict) -> ReferenceText | None:
 
     local_path = _download_book(file_name)
     try:
-        reader = PdfReader(local_path)
-        num_pages = len(reader.pages)
+        with pymupdf.open(local_path) as doc:
+            num_pages = len(doc)
         if num_pages == 0:
             return None
 
         start_page_idx = random.randrange(num_pages)
-        raw_text = _extract_pages_text(reader, start_page_idx, EXCERPT_MAX_PAGES_SCAN)
+        text = extract_text(local_path, start_page_idx, start_page_idx + EXCERPT_MAX_PAGES_SCAN)
         # Випадкова сторінка могла впасти близько до кінця книги — тоді
         # решти тексту може не вистачити на цільову кількість слів. Одна
         # додаткова спроба з початку книги дешевша й простіша, ніж шукати
         # "останню придатну" стартову сторінку заздалегідь.
-        if len(raw_text.split()) < EXCERPT_TARGET_MIN_WORDS and start_page_idx > 0:
+        if len(text.split()) < EXCERPT_TARGET_MIN_WORDS and start_page_idx > 0:
             start_page_idx = 0
-            raw_text = _extract_pages_text(reader, 0, EXCERPT_MAX_PAGES_SCAN)
+            text = extract_text(local_path, 0, EXCERPT_MAX_PAGES_SCAN)
 
-        cleaned = _clean_pdf_text(raw_text)
-        sentences = _split_sentences(cleaned)
+        sentences = _split_sentences(re.sub(r"\s+", " ", text).strip())
         if not sentences:
             return None
 
@@ -117,7 +115,8 @@ def _extract_excerpt_from_book(book: dict) -> ReferenceText | None:
 
 def _download_book(file_name: str) -> str:
     os.makedirs(settings.temp_dir, exist_ok=True)
-    local_path = os.path.join(settings.temp_dir, f"excerpt_{uuid.uuid4().hex}_{file_name}")
+    # Ім'я об'єкта може містити "/" (книги каталогу: catalog/9_grade.pdf).
+    local_path = os.path.join(settings.temp_dir, f"excerpt_{uuid.uuid4().hex}_{os.path.basename(file_name)}")
     minio_client.fget_object(
         bucket_name=settings.minio_bucket,
         object_name=file_name,
@@ -131,27 +130,6 @@ def _cleanup_temp_file(path: str) -> None:
         os.remove(path)
     except OSError:
         pass
-
-
-def _extract_pages_text(reader: PdfReader, start_page_idx: int, max_pages: int) -> str:
-    end_idx = min(len(reader.pages), start_page_idx + max_pages)
-    parts = [reader.pages[i].extract_text() or "" for i in range(start_page_idx, end_idx)]
-    return "\n".join(parts)
-
-
-def _clean_pdf_text(raw: str) -> str:
-    """PyPDF2.extract_text() зберігає перенос слова через дефіс на межі
-    рядка ("склад-\\nка") та часто виносить номер сторінки окремим рядком —
-    жодне з цього не чистить existing normalize_text() (розрахований на вже
-    чисту прозу), тому обробляємо тут, до розбиття на речення."""
-    text = _HYPHEN_LINEBREAK_RE.sub(r"\1\2", raw)
-    lines = []
-    for line in text.split("\n"):
-        stripped = line.strip()
-        if not stripped or _PAGE_NUMBER_LINE_RE.fullmatch(stripped):
-            continue
-        lines.append(stripped)
-    return re.sub(r"\s+", " ", " ".join(lines)).strip()
 
 
 def _split_sentences(text: str) -> list[str]:

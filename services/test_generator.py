@@ -4,12 +4,13 @@ import os
 import time
 from typing import Dict, List, Any, Union
 
-from PyPDF2 import PdfReader
+import pymupdf
 from minio import Minio
 from minio.error import S3Error
 
 from core.config import settings
 from services.llm_service import ContentBlockedError, generate_answer
+from services.pdf_text import extract_pages
 from services.rabbitmq_producer import RabbitMQProducer
 from utils import split_text_into_parts, get_json_from_response
 from utils.prompt_utils import get_prompt
@@ -77,7 +78,8 @@ async def get_book_text(file_name: str, start_page: int, end_page: int) -> str:
     try:
         os.makedirs(settings.temp_dir, exist_ok=True)
 
-        temp_file_path = os.path.join(settings.temp_dir, f"{file_name}.pdf")
+        # Ім'я об'єкта може містити "/" (книги каталогу: catalog/9_grade.pdf).
+        temp_file_path = os.path.join(settings.temp_dir, f"{file_name.replace('/', '_')}.pdf")
 
         if not minio_client.bucket_exists(settings.minio_bucket):
             # Помилку з testId надішле викликач, коли отримає порожній текст.
@@ -92,17 +94,18 @@ async def get_book_text(file_name: str, start_page: int, end_page: int) -> str:
         )
 
         logger.info(f"Retrieving text from pages {start_page} - {end_page}")
-        reader = PdfReader(temp_file_path)
+        with pymupdf.open(temp_file_path) as doc:
+            num_pages = len(doc)
 
         if start_page < 1:
             start_page = 1
-        if end_page > len(reader.pages):
-            end_page = len(reader.pages)
+        if end_page > num_pages:
+            end_page = num_pages
 
-        text = ""
-        for page_num in range(start_page - 1, end_page):
-            page = reader.pages[page_num]
-            text += page.extract_text() + "\n\n"
+        # Лише текст твору — без колонтитулів, виносок, підписів і завдань
+        # підручника; абзаци розділені "\n" (по них split_text_into_parts ділить текст).
+        pages = extract_pages(temp_file_path, start_page - 1, end_page)
+        text = "\n".join(page for page in pages if page)
 
         os.remove(temp_file_path)
 
