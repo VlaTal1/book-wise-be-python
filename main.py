@@ -6,7 +6,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import reading_speed, status
+from api.routes import internal, reading_speed, status
 from core.config import settings
 from services.rabbitmq_consumer import rabbitmq_consumer
 from services import substitution_check
@@ -60,6 +60,7 @@ app.add_middleware(
 
 app.include_router(status.router, prefix="/api", tags=["status"])
 app.include_router(reading_speed.router, prefix="/ws", tags=["reading-speed"])
+app.include_router(internal.router, prefix="/internal", tags=["internal"])
 
 if __name__ == "__main__":
     # UVICORN_RELOAD=1 — автоперезапуск при зміні файлів (розробка). Для

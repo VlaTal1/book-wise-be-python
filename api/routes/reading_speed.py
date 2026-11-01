@@ -9,13 +9,15 @@ from core.security import verify_token
 from models.reading_speed import ReadingSpeedResult
 from services.book_excerpt import NoExcerptAvailableError, select_random_excerpt
 from services.comprehension_quiz import generate_comprehension_quiz
-from services.java_client import report_reading_speed_attempt
+from services.java_client import ReadingAssignmentUnavailableError, get_reading_assignment, report_reading_speed_attempt
 from services.reading_speed_session import ReadingSpeedSession
 from services.stress_background import schedule_stress_check
-from utils.reference_text import load_reference_text
+from utils.reference_text import build_reference_text, load_reference_text
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+DEFAULT_TIME_LIMIT_SECONDS = 60
 
 
 @router.websocket("/reading-speed")
@@ -27,6 +29,9 @@ async def reading_speed_ws(
     # призначеної дитині (services/book_excerpt.py). Явний text_id лишається
     # для розробки/діагностики (фіксований resources/reference_texts/*.json).
     text_id: str | None = Query(default=None),
+    # Фрагмент, призначений вчителем класу (ClassroomReading у Java): текст,
+    # ліміт часу й кількість спроб задає вчитель.
+    assignment_id: int | None = Query(default=None),
 ):
     try:
         user_id = verify_token(token)
@@ -35,13 +40,24 @@ async def reading_speed_ws(
         await websocket.close(code=http_status.WS_1008_POLICY_VIOLATION)
         return
 
+    # Вільне тренування — хвилина (як і раніше); у завданні ліміт задає
+    # вчитель, None — без ліміту (читати до кінця фрагмента).
+    time_limit_seconds: int | None = DEFAULT_TIME_LIMIT_SECONDS
     try:
-        if text_id:
+        if assignment_id is not None:
+            assignment = await asyncio.to_thread(get_reading_assignment, assignment_id, participant_id)
+            reference = build_reference_text(f"assignment:{assignment_id}", assignment["title"], assignment["text"])
+            time_limit_seconds = assignment.get("timeLimitSeconds")
+        elif text_id:
             reference = load_reference_text(text_id)
         else:
             reference = await asyncio.to_thread(select_random_excerpt, participant_id)
     except FileNotFoundError:
         await websocket.close(code=http_status.WS_1008_POLICY_VIOLATION, reason=f"Unknown text_id: {text_id}")
+        return
+    except ReadingAssignmentUnavailableError as e:
+        logger.warning(f"Reading assignment {assignment_id} unavailable for participant {participant_id}: {e.reason}")
+        await websocket.close(code=http_status.WS_1008_POLICY_VIOLATION, reason=e.reason)
         return
     except NoExcerptAvailableError as e:
         logger.warning(f"No excerpt available for participant {participant_id}: {e}")
@@ -60,6 +76,8 @@ async def reading_speed_ws(
         "text_id": reference.id,
         "title": reference.title,
         "words": [w.model_dump() for w in reference.words],
+        "time_limit_seconds": time_limit_seconds,
+        "assignment_id": assignment_id,
     })
 
     try:
@@ -134,6 +152,7 @@ async def reading_speed_ws(
     attempt_id = report_reading_speed_attempt(
         participant_id, reference, metrics, all_word_events, session.audio_object_key(),
         quiz_total=len(quiz) if quiz else 0,
+        classroom_reading_id=assignment_id,
     )
 
     result = ReadingSpeedResult(

@@ -10,6 +10,39 @@ from models.stress import StressCheckResult
 logger = logging.getLogger(__name__)
 
 
+class ReadingAssignmentUnavailableError(Exception):
+    """Фрагмент, призначений класу, недоступний учню: вичерпано спроби,
+    учень не з цього класу або завдання видалено. reason — для клієнта."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def get_reading_assignment(assignment_id: int, participant_id: int) -> dict:
+    """Текст і умови фрагмента, призначеного класу (Java перевіряє, що учень
+    з цього класу і що в нього ще є спроби). Повертає {id, title, text,
+    timeLimitSeconds, maxAttempts, attemptsUsed}."""
+    try:
+        response = requests.get(
+            f"{settings.java_base_url}/internal/classroom-readings/{assignment_id}/session",
+            params={"participantId": participant_id},
+            headers={"X-Internal-Api-Key": settings.java_internal_api_key},
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        logger.error(f"Failed to fetch reading assignment {assignment_id}: {e}")
+        raise ReadingAssignmentUnavailableError("Reading assignment is unavailable") from e
+    if response.status_code == 409:
+        raise ReadingAssignmentUnavailableError("No attempts left")
+    if response.status_code in (403, 404):
+        raise ReadingAssignmentUnavailableError("Reading assignment not found")
+    if not response.ok:
+        logger.error(f"Java returned {response.status_code} for reading assignment {assignment_id}")
+        raise ReadingAssignmentUnavailableError("Reading assignment is unavailable")
+    return response.json()
+
+
 def report_reading_speed_attempt(
     participant_id: int,
     reference: ReferenceText,
@@ -17,6 +50,7 @@ def report_reading_speed_attempt(
     word_events: list[WordEvent],
     audio_object_key: str | None,
     quiz_total: int = 0,
+    classroom_reading_id: int | None = None,
 ) -> int | None:
     """Надсилає результат сесії читання в Java (service-to-service, той самий
     внутрішній API-ключ з обох боків — рішення по п.2 в docs/reading-speed-
@@ -48,6 +82,8 @@ def report_reading_speed_attempt(
         # Скільки питань у тесті на розуміння (0 — тесту немає): Java чекає
         # результат тесту від учня, перш ніж виставити остаточну оцінку.
         "quizTotal": quiz_total,
+        # Фрагмент, призначений класу (None — вільне тренування).
+        "classroomReadingId": classroom_reading_id,
     }
 
     try:

@@ -59,7 +59,9 @@ _STRESSED_VOWELS = {
 }
 _CYRILLIC = re.compile(r"[а-яіїєґ’'А-ЯІЇЄҐ]")
 _COMBINING_ACUTE = "́"
-_ONLY_NUMBERS_RE = re.compile(r"^[\d\s\-–—.,|]*$")
+# Номер сторінки (або пара «34 35»): хоча б одна цифра, крім неї — лише
+# роздільники. Без вимоги цифри сюди потрапляло окреме тире з рядка діалогу.
+_ONLY_NUMBERS_RE = re.compile(r"^[\s\-–—.,|]*\d[\d\s\-–—.,|]*$")
 
 
 @dataclass
@@ -218,9 +220,26 @@ def _normalize_chars(text: str) -> str:
     return re.sub(r"(?<=\w)`(?=\w)", "-", text)
 
 
+def _merge_rows(lines: list[_Line], body_size: float) -> list[_Line]:
+    """Шматки одного візуального рядка — в один рядок. При вирівнюванні по
+    ширині PDF-генератори (напр. reportlab) розставляють слова окремо з
+    великими проміжками, і PyMuPDF віддає їх кількома «рядками»; шматок посеред
+    рядка інакше виглядав би як абзацний відступ."""
+    rows: list[_Line] = []
+    for line in lines:
+        prev = rows[-1] if rows else None
+        if prev is not None and abs(line.y0 - prev.y0) < body_size * 0.5 and line.x0 > prev.x0:
+            prev.text = f"{prev.text.rstrip()} {line.text.lstrip()}"
+            prev.y1 = max(prev.y1, line.y1)
+        else:
+            rows.append(_Line(line.text, line.size, line.x0, line.y0, line.y1, line.block_id))
+    return rows
+
+
 def _to_paragraphs(lines: list[_Line], body_size: float) -> str:
     if not lines:
         return ""
+    lines = _merge_rows(lines, body_size)
     # Лівий край основного тексту сторінки — найменший x0, на якому починається
     # хоча б кілька рядків (обтікання картинки дає окрему «колонку»).
     starts = Counter(round(l.x0) for l in lines)
