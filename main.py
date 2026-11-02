@@ -48,7 +48,14 @@ async def lifespan(app: FastAPI):
     await rabbitmq_consumer.stop_consuming()
 
 
-app = FastAPI(title=settings.app_name, lifespan=lifespan)
+# Docs disabled: the API is exposed publicly via Cloudflare Tunnel
+app = FastAPI(
+    title=settings.app_name,
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 app.add_middleware(
     CORSMiddleware,
