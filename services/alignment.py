@@ -79,6 +79,31 @@ class ReadingAlignmentTracker:
         while self._pointer < len(self._reference_words):
             events.append(self._set_status(self._pointer, WordStatus.NOT_REACHED))
             self._pointer += 1
+        events.extend(self.trim_trailing_skipped())
+        return events
+
+    def trim_trailing_skipped(self) -> list[WordEvent]:
+        """Прибирає з результату суцільну послідовність пропущених слів у
+        самому кінці прочитаного відрізка — переводить їх у NOT_REACHED.
+
+        Коли сесію зупиняють кнопкою або по таймеру посеред тексту, останні
+        кілька слів майже завжди виходять SKIPPED: аудіо обривається, і
+        вирівнювання "дотягує" до них вікно без розпізнаних слів. Це не
+        пропуски читання, а просто кінець запису, тож такі слова не
+        рахуються ні пропущеними, ні прочитаними. NOT_IN_VOCABULARY в цьому
+        хвості теж прибираємо — у метриках вони йдуть як пропущені, а
+        підтвердити, що їх дочитали, нема чим.
+
+        Зсуває attempted_word_count, тож обрізаний хвіст не потрапляє і в
+        текст для перевірки наголосу / тесту на розуміння."""
+        end = self._attempted_word_count
+        while end > 0 and self._statuses.get(end - 1) in (WordStatus.SKIPPED, WordStatus.NOT_IN_VOCABULARY):
+            end -= 1
+        events = [
+            self._set_status(i, WordStatus.NOT_REACHED)
+            for i in range(end, self._attempted_word_count)
+        ]
+        self._attempted_word_count = end
         return events
 
     def attempted_word_count(self) -> int:

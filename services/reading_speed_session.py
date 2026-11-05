@@ -142,6 +142,9 @@ class ReadingSpeedSession:
         for index, status in sorted(confirmed.items()):
             if self._tracker.status_of(index) == WordStatus.CORRECT:
                 events.append(self._tracker.override_status(index, status))
+        # Перевірка замін теж може позначити останні слова як пропущені (запис
+        # обірвався) — знову обрізаємо такий хвіст.
+        events.extend(self._tracker.trim_trailing_skipped())
         logger.info(
             f"Session {self.session_id}: substitution check changed {len(events)} word(s) "
             f"(both open recognizers disagree on {len(confirmed)})"
