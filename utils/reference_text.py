@@ -8,21 +8,23 @@ from models.reading_speed import ReferenceText, ReferenceWord
 from services.vocabulary import is_in_vocabulary
 
 
+# Слово — пробіг \w, всередині якого може бути апостроф: «п’ять», «б’ється»
+# — одне слово, а не «п» + «ять». Дефіс і решта пунктуації слова розділяють
+# ('далеко-широко' -> 'далеко широко', а не неіснуюче 'далекошироко').
+# Апостроф лише між літерами, тож лапки-одинарні 'так' його не зачіпають.
+_WORD_RE = re.compile(r"\w+(?:['’ʼ]\w+)*")
+# У словниках Vosk (graph/words.txt) і MFA апостроф — ASCII ', а в текстах
+# книг і в розпізнаванні Moonshine трапляються ’ та ʼ.
+_APOSTROPHE_RE = re.compile(r"[’ʼ]")
+
+
+def normalize_word(word: str) -> str:
+    return _APOSTROPHE_RE.sub("'", word.lower())
+
+
 def normalize_text(text: str) -> str:
-    """Той самий алгоритм нормалізації, що й у бенчмарках у master/ —
-    пунктуацію (в т.ч. дефіс) заміняємо на пробіл, а не видаляємо, інакше
-    'далеко-широко' склеюється в неіснуюче слово 'далекошироко'."""
-    text = text.lower().strip()
-    text = re.sub(r"[^\w\s]", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-# \w+ дає ті самі межі слів, що й normalize_text() (пунктуацію/дефіс/апостроф
-# замінено на пробіл, отже слова — це максимальні пробіги \w) — але без
-# попереднього lower()/заміни пунктуації, тому можна одночасно з тим самим
-# словом дістати "як воно виглядає в оригіналі" для показу на екрані.
-_WORD_RE = re.compile(r"\w+")
+    """Нижній регістр, апостроф -> ', пунктуація (в т.ч. дефіс) -> пробіл."""
+    return " ".join(normalize_word(w) for w in _WORD_RE.findall(text))
 
 
 def _tokenize_with_display(raw_text: str) -> list[tuple[str, str]]:
@@ -41,7 +43,7 @@ def _tokenize_with_display(raw_text: str) -> list[tuple[str, str]]:
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(raw_text)
         display = raw_text[m.start():end].rstrip()
-        result.append((m.group().lower(), display))
+        result.append((normalize_word(m.group()), display))
     return result
 
 
