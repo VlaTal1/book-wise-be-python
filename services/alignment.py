@@ -27,6 +27,22 @@ TAIL_HOLDBACK = 2
 # читається десь тут, а не спроба вгадати результат заздалегідь.
 PREVIEW_LOOKAHEAD = 2
 
+# Скільки розпізнаних слів тримаємо в буфері, поки в них немає жодного
+# точного збігу з еталоном ("якоря"). Без якоря позицію в тексті не рухаємо:
+# це або шум/вигук, або повтор уже прочитаного, або граматика Vosk "підтягнула"
+# слово з іншого місця тексту. Коли буфер переповнюється, найстаріші слова
+# просто відкидаємо (без статусу).
+MAX_UNANCHORED_PENDING = 6
+
+# Пересинхронізація після реального пропуску шматка тексту (рядок/речення):
+# якщо останні RESYNC_RUN розпізнаних слів ПІДРЯД збігаються з еталоном
+# десь попереду (не далі RESYNC_LOOKAHEAD слів від поточної позиції),
+# переносимо позицію туди, а пропущене між ними позначаємо SKIPPED.
+# Три слова підряд — достатньо сильний доказ; одиночні збіги (шум, повтори,
+# слово, яке граматика "підтягнула" з іншого місця тексту) його не дають.
+RESYNC_RUN = 3
+RESYNC_LOOKAHEAD = 60
+
 _Op = tuple[str, int | None, int | None]
 
 
@@ -215,8 +231,22 @@ class ReadingAlignmentTracker:
             return events
 
         ref_window_indices, ref_window_words = self._build_window(len(self._pending_recognized))
-        ops = _levenshtein_align(ref_window_words, self._pending_recognized)
+        # free_ref_tail: слова вікна ПІСЛЯ останнього розпізнаного — це те,
+        # що ще не прочитано, а не пропуски. Інакше DP мусив би "списати" їх
+        # як del, і на кожне розпізнане слово, що не збігається з вікном
+        # (повтор, шум), позиція стрибала вперед на ALIGN_SLACK+1 слів
+        # (3 skipped + 1 error) — так підсвітка й "тікала" від читача.
+        ops = _levenshtein_align(ref_window_words, self._pending_recognized, free_ref_tail=True)
         commit_upto = len(ops) if final else _find_commit_boundary(ops, TAIL_HOLDBACK)
+
+        if not final and not any(op == "match" for op, _, _ in ops[:commit_upto]):
+            # Немає жодного якоря в тому, що збиралися зафіксувати, — або
+            # читач перескочив уперед (пересинхронізуємось), або це шум /
+            # повтор: тоді чекаємо більше контексту, позицію не рухаємо.
+            events.extend(self._try_resync())
+            if len(self._pending_recognized) > MAX_UNANCHORED_PENDING:
+                self._pending_recognized = self._pending_recognized[-MAX_UNANCHORED_PENDING:]
+            return events
 
         last_committed_window_pos = None
         committed_rec_count = 0
@@ -246,6 +276,35 @@ class ReadingAlignmentTracker:
         self._pending_recognized = self._pending_recognized[committed_rec_count:]
         return events
 
+    def _try_resync(self) -> list[WordEvent]:
+        """Шукає останні RESYNC_RUN розпізнаних слів як суцільний фрагмент
+        еталону попереду поточної позиції (найближче входження). Якщо
+        знайдено — слова між позицією і фрагментом стають SKIPPED (поза
+        словником — NOT_IN_VOCABULARY), а в буфері лишається лише сам
+        фрагмент, який далі вирівнюється звичайним шляхом."""
+        if len(self._pending_recognized) < RESYNC_RUN:
+            return []
+        run = self._pending_recognized[-RESYNC_RUN:]
+
+        in_vocab = [
+            i for i in range(self._pointer, min(len(self._reference_words), self._pointer + RESYNC_LOOKAHEAD))
+            if self._reference_words[i].in_vocabulary
+        ]
+        for k in range(len(in_vocab) - RESYNC_RUN + 1):
+            if [self._reference_words[in_vocab[k + d]].word for d in range(RESYNC_RUN)] == run:
+                target = in_vocab[k]
+                break
+        else:
+            return []
+
+        events = []
+        for idx in range(self._pointer, target):
+            status = WordStatus.SKIPPED if self._reference_words[idx].in_vocabulary else WordStatus.NOT_IN_VOCABULARY
+            events.append(self._set_status(idx, status))
+        self._pointer = target
+        self._pending_recognized = list(run)
+        return events
+
     def _emit_not_in_vocabulary_run(self) -> list[WordEvent]:
         events = []
         while (
@@ -261,11 +320,17 @@ class ReadingAlignmentTracker:
         return WordEvent(index=index, status=status)
 
 
-def _levenshtein_align(ref_words: list[str], hyp_words: list[str]) -> list[_Op]:
+def _levenshtein_align(ref_words: list[str], hyp_words: list[str], free_ref_tail: bool = False) -> list[_Op]:
     """Стандартне Levenshtein-вирівнювання зі зворотним проходом (той самий
     підхід, що й word_level_comparison у master/guided_benchmark.py, але як
     вікно потокового вирівнювання, а не одноразовий прохід по всьому тексту).
-    Повертає список операцій (match/sub/del/ins) у прямому порядку."""
+    Повертає список операцій (match/sub/del/ins) у прямому порядку.
+
+    free_ref_tail=True — "напівглобальне" вирівнювання: хвіст еталону після
+    останнього вирівняного слова нічого не коштує і в результат не потрапляє
+    (для потокового вікна: це ще не прочитаний текст). Серед однаково дешевих
+    варіантів обирається найкоротший префікс еталону — тобто позиція не
+    рухається вперед без підстав."""
     n, m = len(ref_words), len(hyp_words)
     dp = [[0] * (m + 1) for _ in range(n + 1)]
     for i in range(1, n + 1):
@@ -279,8 +344,12 @@ def _levenshtein_align(ref_words: list[str], hyp_words: list[str]) -> list[_Op]:
             else:
                 dp[i][j] = 1 + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
 
+    end_i = n
+    if free_ref_tail:
+        end_i = min(range(n + 1), key=lambda k: (dp[k][m], k))
+
     ops: list[_Op] = []
-    i, j = n, m
+    i, j = end_i, m
     while i > 0 or j > 0:
         if i > 0 and j > 0 and ref_words[i - 1] == hyp_words[j - 1]:
             ops.append(("match", i - 1, j - 1))
