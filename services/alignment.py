@@ -210,7 +210,11 @@ class ReadingAlignmentTracker:
             skipped_count=skipped + not_in_vocab,
             not_in_vocabulary_count=not_in_vocab,
             duration_seconds=round(duration_seconds, 2),
-            wpm=round(correct / minutes, 1),
+            # Темп — усі слова від початку до кінця читання, крім пропущених:
+            # правильні, з помилкою і відсутні у словнику Vosk (їх прочитання
+            # не перевірити, але читач пройшов далі; хвіст таких слів у кінці
+            # запису вже прибрано trim_trailing_skipped).
+            wpm=round((correct + error + not_in_vocab) / minutes, 1),
             accuracy=round(correct / total, 4) if total else 0.0,
         )
 
